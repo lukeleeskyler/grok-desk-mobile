@@ -391,6 +391,23 @@ html[data-desk-theme=dark] .poly-trade a{color:#83cadf}
 .strategy #strategy-totals p {font:11px/1.5 var(--sans);color:var(--signal-muted);margin:5px;}
 .retry-snapshot {background:none;border:1px solid var(--signal-line);border-radius:3px;color:inherit;cursor:pointer;padding:4px 12px;}
 .mast-readings,.model-signal-group,.model-result-group {display:contents;}
+.mast-quote-group {min-width:0;}
+.quote-provenance {
+  width:0;min-width:100%;margin-top:3px;
+  color:var(--head-muted);font:550 10px/1.35 var(--sans);overflow-wrap:anywhere;
+}
+.quote-provenance span {display:block;}
+.quote-provenance [hidden] {display:none;}
+.quote-provenance #quote-origin {color:var(--head-ink);}
+.quote-provenance #quote-origin[data-state=previous],.quote-provenance #quote-previous:not([hidden]) {
+  border-left:2px solid #bf8832;padding-left:5px;color:#79551a;
+}
+.quote-provenance #quote-origin[data-state=previous] {font-weight:700;}
+.quote-provenance #quote-previous:not([hidden]) {margin-top:2px;}
+html[data-desk-theme=dark] .quote-provenance :is(#quote-origin[data-state=previous],#quote-previous) {
+  border-left-color:#cc9e53;color:#e8c78d;
+}
+.quick-market {display:none;}
 .model-exit {display:none;}
 html[data-desk-theme=dark] .strategy {--signal-ink:var(--ink);--signal-muted:var(--muted);--signal-line:var(--line);--signal-paper:var(--paper);}
 html[data-desk-theme=dark] .strategy-head {background:var(--head-tint);}
@@ -420,6 +437,27 @@ html[data-desk-theme=dark] .strategy .loss {color:#ff92ad;}
     padding-top:env(safe-area-inset-top);
   }
   #markets {grid-template-columns:minmax(0,1fr);}
+  .quick-market {
+    display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;
+    align-items:end;gap:8px;padding:6px 0;border-bottom:1px solid var(--head-rule);
+  }
+  .quick-filter {min-width:0;}
+  .quick-filter small {display:block;margin-bottom:3px;font:650 10px var(--sans);color:var(--head-muted);}
+  .quick-filter>div {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));}
+  .quick-filter button,.quick-market a {
+    min-height:39px;padding:3px 7px;border:1px solid var(--head-rule);background:var(--head-paper);
+    color:var(--head-ink);font:700 13px var(--mono);touch-action:manipulation;
+  }
+  .quick-filter button:first-child {border-radius:4px 0 0 4px;}
+  .quick-filter button+button {margin-left:-1px;border-radius:0 4px 4px 0;}
+  .quick-filter button[aria-pressed=true] {
+    position:relative;border-color:var(--head-green);background:var(--head-soft);color:var(--head-green);
+  }
+  .quick-market a {
+    display:flex;align-items:center;justify-content:center;
+    border-radius:4px;padding-inline:10px;color:var(--head-green);text-decoration:none;
+  }
+  .quote-provenance {font-size:11px;line-height:1.45;}
   .mast {
     grid-template-columns:minmax(0,1fr) auto auto;
     grid-template-areas:"brand controls status" "readings readings readings" "nav nav nav";
@@ -501,7 +539,7 @@ html[data-desk-theme=dark] .strategy .loss {color:#ff92ad;}
   }
   .mast .mast-readings {display:contents;}
   .mast .display-buttons {justify-self:start;}
-  .mast .desk-benchmarks {grid-area:bench;border-top:1px solid var(--head-rule);padding-block:6px 2px;}
+  .mast .mast-quote-group {grid-area:bench;border-top:1px solid var(--head-rule);padding-block:6px 2px;}
   .mast .desk-clock {grid-area:clock;flex-direction:row;align-items:center;}
 }
 
@@ -720,10 +758,17 @@ html[data-desk-theme=dark] .strategy .loss {color:#ff92ad;}
 
   .mobile-depth {
     position: relative;
+    scroll-margin-top: 6px;
     margin: 4px 8px 7px;
     font: 500 12px/1.4 var(--mono);
     color: #222b3c;
     font-variant-numeric: tabular-nums;
+  }
+  .mobile-depth:focus-visible { outline: 2px solid #168676; outline-offset: 2px; }
+  .mobile-depth .depth-retry {
+    margin-top: 5px; min-height: 34px; padding: 4px 10px;
+    border: 1px solid #c4cdd4; border-radius: 3px; background: #fff; color: #225d51;
+    font: 600 11px var(--sans);
   }
   .mobile-depth table { width: 100%; border-collapse: collapse; table-layout: fixed; }
   .mobile-depth caption {

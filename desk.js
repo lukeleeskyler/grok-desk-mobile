@@ -567,7 +567,7 @@
 })();
 
 ;
-/* Anonymous read-only Polymarket feed for the standalone file:// dashboard. */
+/* Public Polymarket snapshots. Publish metadata, each book and each history independently. */
 (() => {
   'use strict';
   const gamma = 'https://gamma-api.polymarket.com';
@@ -585,7 +585,7 @@
     return n !== null && n >= 0 && n <= 1 ? n : null;
   };
 
-  function json(url, ttl) {
+  function json(url, ttl, priority = 'auto') {
     const now = performance.now(), previous = cache.get(url);
     if (previous && now < previous.expires) return previous.promise;
     const entry = {expires: Infinity};
@@ -593,7 +593,7 @@
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 7000);
       try {
-        const response = await fetch(url, {cache:'no-store', credentials:'omit', signal:controller.signal});
+        const response = await fetch(url, {cache:'no-store', credentials:'omit', signal:controller.signal, priority});
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const data = await response.json();
         entry.expires = performance.now() + ttl;
@@ -621,10 +621,10 @@
     }).filter(level=>level[1]>0).sort((a, b) => bids ? b[0] - a[0] : a[0] - b[0]);
   }
 
-  async function book(tokenId, condition, name) {
-    const raw = await json(clob + '/book?token_id=' + tokenId, 700);
+  async function book(tokenId, condition, name, startTime, endTime) {
+    const raw = await json(clob + '/book?token_id=' + tokenId, 700, 'high');
     const at = number(raw.timestamp);
-    if (raw.asset_id !== tokenId || raw.market?.toLowerCase() !== condition.toLowerCase() || at === null || at < 1e12 || at > Date.now()+3000) {
+    if (raw.asset_id !== tokenId || raw.market?.toLowerCase() !== condition.toLowerCase() || at === null || at < startTime || at >= endTime || at > Date.now()+3000) {
       throw new Error('Book identity or timestamp mismatch');
     }
     return {name, tokenId, bookAvailable: true, bids: levels(raw.bids, true), asks: levels(raw.asks, false), at,
@@ -636,7 +636,7 @@
     const now = Date.now(), end = Math.min(endTime / 1000, (Math.floor(now / 15000) + 1) * 15);
     if (end <= startTime / 1000) return [];
     const args = new URLSearchParams({market: token, startTs: String(startTime / 1000), endTs: String(end), fidelity: '1'});
-    const raw = await json(clob + '/prices-history?' + args, 15000);
+    const raw = await json(clob + '/prices-history?' + args, 15000, 'low');
     if (!Array.isArray(raw.history)) throw new Error('Missing price history');
     const points = new Map();
     for (const row of raw.history) {
@@ -648,10 +648,11 @@
     return [...points].sort((a,b) => a[0] - b[0]).map(([t,p]) => ({t,p}));
   }
 
-  async function load(interval, seconds) {
+  async function load(interval, seconds, isActive, onSnapshot) {
     const origin = performance.now(), spans = [];
     const slug = 'btc-updown-' + interval + '-' + seconds;
     const data = await json(gamma + '/markets/slug/' + slug, 6000);
+    if (!isActive()) throw new DOMException('Market request expired', 'AbortError');
     const cfg = data.cryptoMarketConfig;
     const startTime = Date.parse(data.eventStartTime), endTime = Date.parse(data.endDate);
     if (data.slug !== slug || !/^Bitcoin Up or Down\b/i.test(data.question) || (cfg?.asset && cfg.asset.toLowerCase() !== 'btc')
@@ -667,63 +668,96 @@
       tokenIds[side] = ids[i]; names[side] = labels[i];
     }
     spans.push({name:'gamma.lookup', start:0, duration:performance.now()-origin});
-    async function measure(name, read, ...args) {
-      const began = performance.now(), span = {name, start:began-origin, duration:0};
-      spans.push(span);
-      try { return await read(...args); }
-      finally { span.duration = performance.now()-began; }
-    }
-    const [books, series] = await Promise.all([
-      Promise.allSettled(sides.map(side => measure('book.'+side, book, tokenIds[side], data.conditionId, names[side]))),
-      Promise.allSettled(sides.map(side => measure('history.'+side, readHistory, tokenIds[side], startTime, endTime)))
-    ]);
-    const outcomes = {}, histories = {}, warnings = [];
-    books.forEach((job, i) => {
-      const side = sides[i];
-      if (job.status === 'fulfilled') outcomes[side] = job.value;
-      else {
-        warnings.push(side + ' order book unavailable: ' + String(job.reason));
-        outcomes[side] = {name:names[side], tokenId:tokenIds[side], bookAvailable:false,
-          bids:[], asks:[], at:null, tickSize:null, minSize:null, negRisk:null, lastTradePrice:null};
-      }
-    });
-    series.forEach((job, i) => {
-      const side = sides[i];
-      histories[side] = job.status === 'fulfilled' ? job.value : [];
-      if (job.status === 'rejected') warnings.push(names[side] + ' price history unavailable: ' + String(job.reason));
-    });
-    const stamps = sides.map(side => outcomes[side].at).filter(t => t !== null), receivedAt = Date.now();
+    const outcomes = {}, histories = {up:[], down:[]}, warnings = [];
     for (const side of sides) {
-      const o = outcomes[side];
-      o.orderReady = false;
-      if (!o.bookAvailable) continue;
-      const age = receivedAt - o.at;
-      const fresh = age >= -3000 && age <= 10000;
-      const validRules = o.tickSize > 0 && o.tickSize < 1 && o.minSize > 0 && typeof o.negRisk === 'boolean';
-      o.orderReady = fresh && validRules;
-      if (!fresh) warnings.push(side + ' order book timestamp is not fresh');
-      if (!validRules) warnings.push(side + ' order rules unavailable');
+      outcomes[side] = {name:names[side], tokenId:tokenIds[side], bookAvailable:false, bids:[], asks:[], at:null,
+        tickSize:null, minSize:null, negRisk:null, lastTradePrice:null, orderReady:false};
     }
-    return {slug, title:data.question, url:'https://polymarket.com/event/' + slug, startTime, endTime, interval,
-      conditionId:data.conditionId, version:data.version, tokenIds, outcomes, asOf:stamps.length ? Math.min(...stamps) : null, receivedAt,
-      acceptingOrders:startTime <= receivedAt && receivedAt < endTime && data.acceptingOrders === true && data.active === true && data.closed === false
-        && data.enableOrderBook === true && data.archived !== true && data.tradingEligible !== false,
-      history:histories.up, histories, warnings, resolutionSource:data.resolutionSource ?? null,
-      description:data.description ?? null, publicTrace:{spans, total:performance.now()-origin}};
+    const active = data.acceptingOrders === true && data.active === true && data.closed === false
+      && data.enableOrderBook === true && data.archived !== true && data.tradingEligible !== false;
+    const meta = {slug, title:data.question, url:'https://polymarket.com/event/' + slug,
+      startTime, endTime, interval, conditionId:data.conditionId, version:data.version, tokenIds,
+      resolutionSource:data.resolutionSource ?? null, description:data.description ?? null};
+
+    function snapshot() {
+      const receivedAt = Date.now();
+      const stamps = sides.map(side => outcomes[side].at).filter(Number.isFinite);
+      return {...meta, outcomes:{...outcomes}, histories:{...histories}, history:histories.up,
+        warnings:[...warnings], asOf:stamps.length ? Math.min(...stamps) : null, receivedAt,
+        acceptingOrders:active && startTime <= receivedAt && receivedAt < endTime,
+        publicTrace:{spans:spans.slice(), total:performance.now()-origin}};
+    }
+    function publish() {
+      if (onSnapshot && isActive()) onSnapshot(snapshot());
+    }
+    async function readPart(side, kind) {
+      const began = performance.now();
+      try {
+        if (kind === 'book') {
+          const o = await book(tokenIds[side], data.conditionId, names[side], startTime, endTime);
+          if (!isActive()) return;
+          const age = Date.now() - o.at;
+          const fresh = age >= -3000 && age <= 10000;
+          const validRules = o.tickSize > 0 && o.tickSize < 1 && o.minSize > 0 && typeof o.negRisk === 'boolean';
+          outcomes[side] = {...o, orderReady:fresh && validRules};
+          if (!fresh) warnings.push(side + ' order book timestamp is not fresh');
+          if (!validRules) warnings.push(side + ' order rules unavailable');
+        } else {
+          const series = await readHistory(tokenIds[side], startTime, endTime);
+          if (!isActive()) return;
+          histories[side] = series;
+        }
+      } catch (error) {
+        if (!isActive()) return;
+        warnings.push(side + ' ' + kind + ' unavailable: ' + String(error));
+      }
+      spans.push({name:kind + '.' + side, start:began-origin, duration:performance.now()-began});
+      publish();
+    }
+
+    // Token IDs are sufficient for the WebSocket subscription.
+    publish();
+    await Promise.all([readPart('up','book'), readPart('down','book'),
+      readPart('up','history'), readPart('down','history')]);
+    return snapshot();
   }
 
-  window.readPMMarket = async function readPMMarket(interval) {
+  // Each consumer can stop waiting immediately. Shared HTTP reads in json() can still
+  // serve another consumer; none of their continuations may publish an obsolete window.
+  function readWindow(interval, seconds, step, signal, onSnapshot) {
+    return new Promise((resolve, reject) => {
+      let active = true;
+      const end = (seconds + step) * 1000;
+      const isActive = () => active && !signal?.aborted && Date.now() < end;
+      const abort = () => finish(reject, new DOMException('Market request ended', 'AbortError'));
+      const timer = setTimeout(abort, Math.max(0, end - Date.now()) + 1);
+      function finish(callback, value) {
+        if (!active) return;
+        active = false;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        callback(value);
+      }
+      signal?.addEventListener('abort', abort, {once:true});
+      if (signal?.aborted) return abort();
+      load(interval, seconds, isActive, onSnapshot).then(value => finish(resolve, value), error => finish(reject, error));
+    });
+  }
+
+  window.readPMMarket = async function readPMMarket(interval, {signal, onSnapshot} = {}) {
     const step = periods.get(interval);
     if (!step) throw new Error('interval must be 5m or 15m');
     const current = () => Math.floor(Date.now() / (step * 1000)) * step;
-    const start = current();
-    try {
-      const result = await load(interval, start);
-      return current() === start ? result : await load(interval, current());
-    } catch (error) {
-      if (current() === start) throw error;
-      return load(interval, current());
+    while (!signal?.aborted) {
+      const start = current();
+      try {
+        const result = await readWindow(interval, start, step, signal, onSnapshot);
+        if (current() === start) return result;
+      } catch (error) {
+        if (signal?.aborted || current() === start) throw error;
+      }
     }
+    throw new DOMException('Market request aborted', 'AbortError');
   };
 })();
 
@@ -736,7 +770,7 @@
   const numeric=v=>(typeof v==='number'||typeof v==='string'&&v.trim()!=='')&&Number.isFinite(+v);
   const price=v=>numeric(v)&&+v>=0&&+v<=1;
   const size=v=>numeric(v)&&+v>=0;
-  const blank=()=>({book:null,samples:new Map(),recentTrades:[],seenTrades:new Set(),volumes:new Map(),lastPrice:null,tradeAt:0,tick:null});
+  const blank=()=>({book:null,lastBook:null,samples:new Map(),recentTrades:[],seenTrades:new Set(),volumes:new Map(),lastPrice:null,tradeAt:0,tick:null});
   function createPMStream(onUpdate,{bookOnly=false}={}){
     let base=null,states={up:blank(),down:blank()},ws=null,retry=0,heartbeat=0,flush=0,epoch=0;
     let lastFrame=0,backoff=800,lastEventReceived=0,opening=0;
@@ -757,13 +791,16 @@
       const outcomes={},histories={},marketTrades={},tradeVolumes={},now=Date.now();
       let streaming=false;
       for(const side of sides){
-        const state=states[side],o=base.outcomes[side],b=state.book;
-        const use=!!b&&(!o.bookAvailable||b.at>=o.at)&&ws?.readyState===WebSocket.OPEN;
+        const state=states[side],o=base.outcomes[side];
+        // Keep the last full visible quote across a reconnect, without applying deltas to it.
+        const b=state.lastBook&&(!state.book||state.lastBook.at>state.book.at)?state.lastBook:state.book;
+        const connected=!!b&&b===state.book&&ws?.readyState===1;
+        const use=!!b&&(!o.bookAvailable||b.at>o.at||(connected&&b.at===o.at));
         outcomes[side]={...o,bookSource:o.bookAvailable?'rest':null};
         if(use){
           const bids=sorted(b.bids,true),asks=sorted(b.asks,false);
-          Object.assign(outcomes[side],{bids,asks,at:b.at,bookAvailable:true,bookSource:'websocket',tickSize:state.tick??o.tickSize});
-          if(now-b.at<=10000)streaming=true;
+          Object.assign(outcomes[side],{bids,asks,at:b.at,bookAvailable:true,bookSource:connected?'websocket':'last-websocket',tickSize:state.tick??o.tickSize});
+          if(connected&&now-b.at<=10000)streaming=true;
           if(!bookOnly)sample(state,b.at,mid(bids,asks));
         }
         if(state.tradeAt>=(o.at||0))outcomes[side].lastTradePrice=state.lastPrice??o.lastTradePrice;
@@ -865,24 +902,46 @@
       socket.onclose=()=>{
         if(gen!==epoch)return;
         clearTimeout(opening);clearInterval(heartbeat);ws=null;
-        for(const side of sides)states[side].book=null;
+        for(const side of sides){
+          const state=states[side];
+          if(state.book&&(!state.lastBook||state.book.at>=state.lastBook.at))state.lastBook=state.book;
+          state.book=null;
+        }
         queue();reconnect();
       };
       socket.onerror=()=>socket.close();
     }
     function reconnect(){retry=setTimeout(connect,backoff);backoff=Math.min(12000,2*backoff);}
+    function combineHistory(previous=[],incoming=[]){
+      if(!incoming.length||incoming===previous)return previous;
+      if(!previous.length)return incoming;
+      const byTime=new Map(previous.map(point=>[point.t,point]));
+      for(const point of incoming)byTime.set(point.t,point);
+      return Array.from(byTime.values()).sort((a,b)=>a.t-b.t);
+    }
     function accept(next){
+      if(!next || Date.now()<next.startTime || Date.now()>=next.endTime)return snapshot();
       const changed=base?.conditionId!==next.conditionId||sides.some(s=>base?.tokenIds?.[s]!==next.tokenIds[s]);
       if(changed)stop();
-      base=next;
+      const outcomes={},histories={};
       for(const side of sides){
-        const o=next.outcomes[side];
+        const incoming=next.outcomes[side],previous=base?.outcomes[side];
+        const valid=incoming.tokenId===next.tokenIds[side]&&incoming.bookAvailable
+          &&Number.isFinite(incoming.at)&&incoming.at>=next.startTime&&incoming.at<next.endTime;
+        if(valid&&(!previous?.bookAvailable||incoming.at>=previous.at))outcomes[side]=incoming;
+        else if(previous)outcomes[side]=previous;
+        else outcomes[side]={...incoming,bookAvailable:false,orderReady:false,bids:[],asks:[],at:null,lastTradePrice:null};
+        histories[side]=combineHistory(base?.histories?.[side],next.histories?.[side]);
+      }
+      base={...next,outcomes,histories,history:histories.up};
+      for(const side of sides){
+        const o=outcomes[side];
         if(!bookOnly&&o.bookAvailable)sample(states[side],o.at,mid(o.bids,o.asks));
       }
       if(changed)connect();
       return snapshot();
     }
-    return {accept,stop};
+    return {accept,stop,latest:snapshot};
   }
   if(typeof module==='object'&&module.exports)module.exports={createPMStream};
   else window.createPMStream=createPMStream;
@@ -1088,11 +1147,18 @@
   'use strict';
   const narrow = matchMedia('(max-width: 900px)');
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-  const layouts = new WeakMap();
+  const number = new Intl.NumberFormat('en-US', {maximumFractionDigits: 2});
+  const cents = price => Number.isFinite(price) ? number.format(price * 100) + '¢' : '—';
+  let layout = null;
+  let selection = null;
 
-  function buildTable(panel) {
+  function buildTable(chart, target) {
     const region = document.createElement('div');
     region.className = 'mobile-depth';
+    region.id = 'live-depth';
+    region.tabIndex = -1;
+    region.setAttribute('role', 'region');
+    region.setAttribute('aria-label', '所选合约买卖五档');
     const table = document.createElement('table');
     const caption = table.createCaption();
     const head = table.createTHead().insertRow();
@@ -1107,41 +1173,62 @@
       const row = body.insertRow();
       return Array.from({length: 4}, () => row.insertCell());
     });
-    region.append(table, panel.targets.taker);
-    panel.targets.taker.style.left = '73%';
-    panel.targets.taker.style.top = '32%';
-    panel.chart.after(region);
-    return {region, caption, rows};
+    const refresh = document.getElementById('refresh');
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'depth-retry';
+    retry.textContent = '刷新盘口';
+    retry.addEventListener('click', () => refresh.click());
+    region.append(table, retry, target);
+    target.style.left = '73%';
+    target.style.top = '32%';
+    chart.after(region);
+    const visibility = new IntersectionObserver(([entry]) => {
+      if (layout?.region === region) layout.visible = entry.isIntersecting;
+    });
+    visibility.observe(region);
+    return {region, caption, rows, retry, refresh, chart, target, visibility, visible: false};
   }
 
-  function drawBook(panel, book, model, formatSize, formatPrice) {
-    let layout = layouts.get(panel);
+  function syncTable() {
     if (!narrow.matches) {
       if (layout) {
-        panel.chart.append(panel.targets.taker);
+        layout.visibility.disconnect();
+        layout.chart.append(layout.target);
         layout.region.remove();
-        layouts.delete(panel);
+        layout = null;
       }
-      return false;
+      return;
     }
+    if (!selection) return;
     if (!layout) {
-      layout = buildTable(panel);
-      layouts.set(panel, layout);
+      const chart = document.querySelector('#live-tape .pmd-plot');
+      const target = chart?.querySelector('[data-target="taker"]');
+      if (!target) return;
+      layout = buildTable(chart, target);
     }
-    const status = !book.available ? '等待盘口' : model.stale ? '上次盘口' : '五档盘口';
-    const caption = model.side.toUpperCase() + ' · ' + status + '　中间价 ' + formatPrice(book.mid);
+    const {snapshot, interval, side, stale} = selection;
+    const now = Date.now();
+    const book = snapshot?.interval === interval && now >= snapshot.startTime && now < snapshot.endTime
+      ? snapshot.outcomes?.[side] : null;
+    const available = book?.bookAvailable && Number.isFinite(book.at);
+    const bids = available ? book.bids.slice(0, 5) : [];
+    const asks = available ? book.asks.slice(0, 5) : [];
+    const mid = bids.length && asks.length && asks[0][0] >= bids[0][0] ? (bids[0][0] + asks[0][0]) / 2 : null;
+    const status = !available ? '等待本期五档盘口' : stale ? '上次盘口' : '五档盘口';
+    const caption = interval + ' · ' + side.toUpperCase() + ' · ' + status + (available ? '　中间价 ' + cents(mid) : '');
     if (layout.caption.textContent !== caption) layout.caption.textContent = caption;
-    const bids = book.bids.slice(0, 5);
-    const asks = book.asks.slice(0, 5);
+    layout.retry.hidden = Boolean(available && !stale);
+    layout.retry.disabled = layout.refresh.disabled;
     const peak = Math.max(1, ...bids.map(level => level[1]), ...asks.map(level => level[1]));
     for (const [index, cells] of layout.rows.entries()) {
       for (const [side, level] of [bids[index], asks[index]].entries()) {
-        const price = level ? formatPrice(level[0]) : '—';
-        const size = level ? formatSize(level[1], 2) : '—';
+        const price = level ? cents(level[0]) : '—';
+        const size = level ? number.format(level[1]) : '—';
         const priceCell = cells[side * 2], sizeCell = cells[side * 2 + 1];
         if (priceCell.textContent !== price) priceCell.textContent = price;
         if (sizeCell.textContent !== size) {
-          if (sizeCell.textContent && !reducedMotion.matches && panel.visible) {
+          if (sizeCell.textContent && !reducedMotion.matches && layout.visible) {
             sizeCell.animate([{opacity: .52}, {opacity: 1}], {duration: 170});
           }
           sizeCell.textContent = size;
@@ -1150,9 +1237,13 @@
         if (sizeCell.style.getPropertyValue('--depth') !== depth) sizeCell.style.setProperty('--depth', depth);
       }
     }
-    return true;
   }
-  window.GrokMobilePanels = {narrow, drawBook};
+  function updateBook(snapshot, interval, side, stale) {
+    selection = {snapshot, interval, side, stale};
+    syncTable();
+  }
+  narrow.addEventListener('change', syncTable);
+  window.GrokMobilePanels = {narrow, updateBook};
 })();
 
 ;
@@ -1463,7 +1554,7 @@
     reading.spotter=isBTC?(latest?'BTC/USD 最近分钟报价 '+dollars(latest.p)+' · '+time(latest.t)+' UTC'+(spot.stale?'（上次观测）。':'。'):'等待真实 BTC/USD 分钟 K 线。'):(latest?dir+' 最新报价样本 '+cents(latest.p)+' · '+time(latest.t,true)+' UTC。':'暂无 '+dir+' 历史报价。');
     reading.taker=b.asks.length?dir+(m.stale?' 上次盘口卖一 ':' 卖一 ')+cents(b.asks[0][0])+'，挂单 '+fmt(b.asks[0][1],4)+' 份。':'当前方向暂无有效卖单。';
     const {w,h,c,txt,dot,rect,fill,line,gr}=g;
-    const stackedBook=window.GrokMobilePanels.drawBook(p,b,m,fmt,cents);
+    const stackedBook=window.GrokMobilePanels.narrow.matches;
     const bookW=stackedBook?0:Math.max(67,w*.24),bookX=w-bookW,axisW=stackedBook?(isBTC?75:46):(isBTC?(w>400?55:44):(w>400?32:25)),x0=4,x1=bookX-axisW-3,top=h>75?13:6,base=h-10,volH=Math.max(6,(base-top)*.15),bottom=Math.max(top+10,base-volH-4);
     p.chart.deskScanZones={spotter:[x0,top,x1,bottom],taker:[bookX+2,9,w-2,h-2]};
     if(rows.length){
@@ -2706,16 +2797,19 @@
   const compactShares=new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:1});
   const size=n=>Number.isFinite(n)?nf.format(n)+' 份':'—';
   const isCurrent=s=>s&&s.startTime<=Date.now()&&s.endTime>Date.now();
-  const fresh=o=>o?.bookAvailable&&Number.isFinite(o.at)&&o.at<=Date.now()+3000&&o.at>=Date.now()-10000;
+  const fresh=o=>o?.bookAvailable&&o.bookSource!=='last-websocket'&&Number.isFinite(o.at)&&o.at<=Date.now()+3000&&o.at>=Date.now()-10000;
+  const periodMs=value=>(value==='15m'?15:5)*60000;
+  const windowStart=value=>Math.floor(Date.now()/periodMs(value))*periodMs(value);
   let interval=saved('interval')==='15m'?'15m':'5m',side=saved('side')==='down'?'down':'up';
-  let snapshot=null, fetching=false, err='',generation=0,timer=null,controller=null, lastPull=0,closedPhase=null;
+  let snapshot=null, fetching=false, err='',generation=0,timer=null,controller=null, lastPull=0;
+  let activeStart=windowStart(interval),expiryTimer=null,previousWindow=null;
   let tour=saved('tour')!=='off',job=null,inspectIndex=0,nextInspection=0,animT=0,lastRAF=0;
   let lastCompletedLiveRole=null;
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
   const flight=window.createDeskFlight(el('transit'));
   const field=window.createReactor(el('field'),el('art'),agents,id=>inspect(id,true));
   const hud=window.createClassicHUD({agents,field,inspect});
-  const tabs=[...document.querySelectorAll('[data-interval]')],sides=[...document.querySelectorAll('.quotes [data-side]')];
+  const tabs=[...document.querySelectorAll('button[data-interval]')],sides=[...document.querySelectorAll('button[data-side]')];
   let spotData=null,feedTrace=null,traceNumber=0;
   let publicPrintAt=0,lastPublicNote=0;
   const durations=new Map();
@@ -2749,7 +2843,9 @@
   });
   function updatePanels(){
     const st=statusText()[0],stale=st==='stale'||st==='offline';
-    panels.update(snapshot,side,job?.id||null,stale,null,displayedTrace(),{unit:chartUnit,spot:spotData});
+    const current=isCurrent(snapshot)?snapshot:null;
+    window.GrokMobilePanels.updateBook(current,interval,side,stale);
+    panels.update(current,side,job?.id||null,stale,null,displayedTrace(),{unit:chartUnit,spot:spotData});
     const src=chartUnit==='btc'?(spotData?.source||'BTC/USD 现货')+' · 现货参考价':'Polymarket · '+side.toUpperCase()+' 合约';
     const label=src+(chartUnit==='btc'&&spotData?.status!=='live'?' · '+(spotData?.status==='stale'?'上次观测':'等待最新数据'):'')+' ｜ 盘口单位 ¢';
     if(el('chart-source').textContent!==label)el('chart-source').textContent=label;
@@ -2782,8 +2878,32 @@
     save('side',side);stopJob();render();hud.note(null,'读取 '+side.toUpperCase()+' 盘口');
   }
   function setIntervalChoice(value){
-    if(value===interval)return;
-    clearPatrol();interval=value;save('interval',value);generation++;controller?.abort();fetching=false;clearTimeout(timer);snapshot=null;stream.stop();feedTrace=null;durations.clear();lastPull=0;err='';stopJob();nextInspection=animT+.8;closedPhase=null;hud.clear();hud.note(null,'切换至 '+value+' 合约');render();pull();
+    if(!['5m','15m'].includes(value)||value===interval)return;
+    interval=value;save('interval',value);
+    previousWindow=null;
+    resetWindow(windowStart(interval),'切换至 '+value+' 合约');
+  }
+  function scheduleExpiry(){
+    clearTimeout(expiryTimer);
+    expiryTimer=setTimeout(checkWindow,Math.max(1,activeStart+periodMs(interval)-Date.now()));
+  }
+  function checkWindow(){
+    const start=windowStart(interval);
+    if(start===activeStart){scheduleExpiry();return false;}
+    // Only the immediately preceding window can supply a closing reference.
+    // The last WebSocket frame can be received just before expiry, between two UI paints.
+    const outgoing=stream.latest();
+    previousWindow=outgoing?.interval===interval&&outgoing.endTime===start?outgoing:null;
+    resetWindow(start,'本期已结束，等待新一期盘口');
+    return true;
+  }
+  function resetWindow(start,note){
+    activeStart=start;generation++;
+    controller?.abort();controller=null;fetching=false;clearTimeout(timer);
+    stream.stop();snapshot=null;err='';lastPull=0;
+    clearPatrol();feedTrace=null;durations.clear();publicPrintAt=0;lastPublicNote=0;
+    stopJob();nextInspection=animT+.8;hud.clear();hud.note(null,note);
+    render();scheduleExpiry();pull();
   }
   function setTour(){
     const button=el('tour');
@@ -2800,24 +2920,59 @@
   for(const b of sides)b.addEventListener('click',()=>setSide(b.dataset.side));
   el('refresh').addEventListener('click',()=>{if(!fetching){clearTimeout(timer);pull();}});
   function setBanner(message){const n=el('status-note');n.textContent=message;n.hidden=!message;}
+  function quoteFor(market,direction){
+    const book=market?.outcomes[direction];
+    if(!book?.bookAvailable||!Number.isFinite(book.at)||book.at<market.startTime||book.at>=market.endTime)return null;
+    return book.bids.length||book.asks.length?book:null;
+  }
   function statusText(){
     if(!snapshot)return err?['offline','连接失败']:['loading','正在连接'];
     if(!isCurrent(snapshot))return ['stale','正在换期'];
-    if(!fresh(snapshot.outcomes[side])||(err&&snapshot.outcomes[side]?.bookSource!=='websocket'))return ['stale','报价待更新'];
+    const quote=quoteFor(snapshot,side);
+    if(!quote)return err?['offline','报价不可用']:['loading','等待本期报价'];
+    if(!fresh(quote)||(err&&quote.bookSource!=='websocket'))return ['stale','报价待更新'];
     if(err)return ['live','盘口推送在线'];
     return ['live','行情在线'];
   }
+  function windowRange(market){
+    return clock.format(market.startTime).slice(0,5)+'–'+clock.format(market.endTime).slice(0,5);
+  }
+  function renderHeadline(current,status){
+    const quote=quoteFor(current,side);
+    const prior=quoteFor(previousWindow,side);
+    const shown=quote||prior;
+    const bid=shown?.bids[0],ask=shown?.asks[0];
+    el('mast-side').textContent=side.toUpperCase();
+    el('mast-bid').textContent=cents(bid?.[0]);el('mast-ask').textContent=cents(ask?.[0]);
+    const qty=bid&&ask?bid[1]+ask[1]:null;
+    el('mast-size').textContent=Number.isFinite(qty)?compactShares.format(qty):'—';
+    el('mast-size').title=Number.isFinite(qty)?'买一与卖一合计 '+size(qty):'等待双边盘口';
+    const origin=el('quote-origin'),previous=el('quote-previous');
+    const contract=interval+' '+side.toUpperCase();
+    const secondsBeforeClose=prior?Math.ceil((previousWindow.endTime-prior.at)/1000):0;
+    const priorLabel=prior?'上期收盘参考 · '+contract+' '+windowRange(previousWindow)+' · 最后观测 '+clock.format(prior.at)
+      +(secondsBeforeClose>10?'（收盘前 '+secondsBeforeClose+' 秒）':''):'';
+    if(quote){
+      origin.dataset.state=status;
+      origin.textContent=(status==='live'?'本期实时':'本期上次报价')+' · '+contract+' '+windowRange(current)+' · '+clock.format(quote.at)+' 更新';
+    }else{
+      origin.dataset.state=prior?'previous':'waiting';
+      origin.textContent=prior?priorLabel+' · 等待本期报价':'等待本期报价 · '+contract;
+    }
+    origin.title=prior&&!quote?'上期收盘前本页最后观测的买一和卖一，单位为每份合约美分。':'合约时段与观测时刻均为本地时间';
+    previous.hidden=!(quote&&prior);
+    previous.textContent=quote&&prior?priorLabel+' · 买一 '+cents(prior.bids[0]?.[0])+' / 卖一 '+cents(prior.asks[0]?.[0]):'';
+  }
   function render(){
-    const [status,label]=statusText();const s=snapshot;
+    const [status,label]=statusText();const s=isCurrent(snapshot)?snapshot:null;
     if(status!=='live')round=null;
     el('source-state').dataset.state=status;
     el('swarm-state').textContent={live:'ONLINE',loading:'SYNCING',stale:'STALE',offline:'OFFLINE'}[status];
     el('refresh').title=label+' · 刷新 Polymarket 行情';
     el('refresh').setAttribute('aria-label',el('refresh').title);
     const windowId=el('mast-window');
-    const current=isCurrent(s);
-    windowId.textContent=current?'#'+utcClock.format(s.startTime).slice(0,5).replace(':',''):'—';
-    windowId.parentElement.title=current?'窗口号取开盘 UTC 时分 · '+new Date(s.startTime).toISOString().slice(0,10)+' '+utcClock.format(s.startTime).slice(0,5)+'–'+utcClock.format(s.endTime).slice(0,5)+' UTC · '+s.interval:'等待当前合约窗口';
+    windowId.textContent=s?'#'+utcClock.format(s.startTime).slice(0,5).replace(':',''):'—';
+    windowId.parentElement.title=s?'窗口号取开盘 UTC 时分 · '+new Date(s.startTime).toISOString().slice(0,10)+' '+utcClock.format(s.startTime).slice(0,5)+'–'+utcClock.format(s.endTime).slice(0,5)+' UTC · '+s.interval:'等待当前合约窗口';
     tabs.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.interval===interval)));
     sides.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.side===side)));
     el('refresh').disabled=fetching;
@@ -2830,13 +2985,9 @@
       const lagging=o?.bookAvailable&&(!isCurrent(s)||!fresh(o));
       el('quote-'+k+'-meta').textContent=o?.bookAvailable?(lagging?'上次盘口 · ':'')+'买一 '+cents(bid?.[0])+' · 卖量 '+(ask?size(ask[1]):'—'):'等待盘口';
     }
-    const o=s?.outcomes[side],ask=o?.asks?.[0]?.[0],bid=o?.bids?.[0]?.[0];
+    const o=quoteFor(s,side),ask=o?.asks?.[0]?.[0],bid=o?.bids?.[0]?.[0];
     const hasBid=Number.isFinite(bid),hasAsk=Number.isFinite(ask);
-    el('mast-side').textContent=side.toUpperCase();
-    el('mast-bid').textContent=cents(bid);el('mast-ask').textContent=cents(ask);
-    const qty=hasBid&&hasAsk?o.bids[0][1]+o.asks[0][1]:null;
-    el('mast-size').textContent=Number.isFinite(qty)?compactShares.format(qty):'—';
-    el('mast-size').title=Number.isFinite(qty)?'买一与卖一合计 '+size(qty):'等待双边盘口';
+    renderHeadline(s,status);
     const spread=hasAsk&&hasBid&&ask>=bid?cents(ask-bid):'—';
     const marketName='BTC '+side.toUpperCase()+' · '+interval.toUpperCase();
     el('contract-name').textContent=marketName;
@@ -2846,16 +2997,16 @@
     el('cmd-min').textContent=el('min-size').textContent=size(o?.minSize);
     el('last-book').textContent=o?.at?clock.format(o.at):'—';
     el('selected-outcome').textContent=side.toUpperCase();
-    el('field-status').textContent=s?side.toUpperCase()+' / '+(s.acceptingOrders?'接单中':'暂停接单'):'连接 Polymarket';
+    el('field-status').textContent=o?side.toUpperCase()+' / '+(s.acceptingOrders?'接单中':'暂停接单'):'等待本期盘口';
     let message='';
     if(err)message=(o?.bookSource==='websocket'&&fresh(o)?'盘口推送在线，正在重试合约资料。':s?'行情刷新失败，保留上次快照。':'暂时无法取得本期行情。')+' '+err;
-    else if(s&&!isCurrent(s))message='本期已结束，正在获取下一期合约。';
+    else if(!o&&previousWindow)message='已换期，等待 '+side.toUpperCase()+' 的本期报价。';
     else if(s&&!fresh(s.outcomes[side]))message='所选方向的盘口缺失或已超过 10 秒。等待最新报价。';
     else if(s&&!s.acceptingOrders)message='本期合约当前未开放委托，可以继续查看公开行情。';
     else if(s?.warnings?.length)message='部分数据暂未返回，缺失项目以空值显示。';
     setBanner(message);updateCountdown();
     const stale=status==='offline'||status==='stale';
-    const transport=o?.bookAvailable?(o.bookSource==='websocket'?'CLOB WEBSOCKET':'REST 快照'):'等待盘口';
+    const transport=o?.bookAvailable?(o.bookSource?.includes('websocket')?'CLOB WEBSOCKET':'REST 快照'):'等待盘口';
     el('stream-source').textContent=stale?'上次观测 · '+transport:transport;
     updatePanels();
     hud.render(s,side,job,stale);
@@ -2863,39 +3014,39 @@
   function updateCountdown(){
     const now=Date.now(),stamp=utcClock.format(now),timeEl=el('clock');
     if(timeEl.textContent!==stamp){timeEl.textContent=stamp;timeEl.dateTime=new Date(now).toISOString();}
-    if(!snapshot){el('deadline').textContent='—';el('deadline').removeAttribute('title');return;}
-    const sec=Math.max(0,Math.ceil((snapshot.endTime-Date.now())/1000));
+    const end=activeStart+periodMs(interval);
+    const sec=Math.max(0,Math.ceil((end-now)/1000));
     el('deadline').textContent=String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0');
-    el('deadline').title='到期 '+clock.format(snapshot.endTime)+' · 本地时间';
-  }
-  async function readMarket(which,signal,mark){
-    const data=await window.readPMMarket(which,{signal});
-    mark('gamma+clob');
-    return data;
+    el('deadline').title=interval+' 当前窗口到期 '+clock.format(end)+' · 本地时间';
   }
   async function pull(){
     if(fetching)return;
-    const gen=generation,which=interval;const ctl=new AbortController();controller=ctl;fetching=true;render();
+    const gen=generation,which=interval,expectedStart=activeStart;
+    const ctl=new AbortController();controller=ctl;fetching=true;render();
     const timeout=setTimeout(()=>ctl.abort(),18000);
     const start=performance.now(),spans=[];let cursor=start,publicTrace=null,publicErrors=0;
     function mark(name){const t=performance.now();spans.push({name,start:cursor-start,duration:t-cursor});cursor=t;}
-    try{
-      const data=await readMarket(which,ctl.signal,mark);
-      if(gen!==generation)return;
+    function acceptStage(data){
+      if(gen!==generation||ctl.signal.aborted||!isCurrent(data)||data.startTime!==expectedStart)return;
       if(data.interval!==which||!data.conditionId||!data.outcomes?.up||!data.outcomes?.down)throw Error('返回的合约不匹配');
+      const changed=snapshot?.conditionId!==data.conditionId;
+      snapshot=stream.accept(data);
+      if(changed){
+        clearPatrol();stopJob();nextInspection=animT+.35;hud.clear();
+        publicPrintAt=0;lastPublicNote=0;feedTrace=null;durations.clear();
+        hud.note(null,'已载入 BTC '+which+' 合约');
+      }else if(err)hud.note(null,'行情连接已恢复');
+      err='';lastPull=Date.now();render();
+    }
+    try{
+      const data=await window.readPMMarket(which,{signal:ctl.signal,onSnapshot:acceptStage});
+      if(gen!==generation||!isCurrent(data)||data.startTime!==expectedStart)return;
+      mark('gamma+clob');
       if(data.publicTrace?.spans?.length && Number.isFinite(data.publicTrace.total)){
         publicTrace=data.publicTrace;
         publicErrors=(data.warnings||[]).filter(x=>/unavailable/i.test(x)).length;
       }
-      mark('market.check');
-      if(snapshot?.conditionId!==data.conditionId){
-        clearPatrol();stopJob();nextInspection=animT+.35;hud.clear();
-        publicPrintAt=0;lastPublicNote=0;feedTrace=null;durations.clear();
-        hud.note(null,'已载入 BTC '+which+' 合约');
-      }
-      else if(err)hud.note(null,'盘口连接已恢复');
-      snapshot=stream.accept(data);mark('book.sync');
-      err='';lastPull=Date.now();closedPhase=null;
+      acceptStage(data);mark('book.sync');
     }catch(e){
       if(gen!==generation)return;
       if(!err)hud.note(null,'行情连接中断，等待重试');
@@ -2905,13 +3056,16 @@
       clearTimeout(timeout);if(gen===generation){controller=null;fetching=false;render();mark('ui.update');
         track(err||!publicTrace?{source:'行情',spans,total:cursor-start,errors:err?1:0}:
           {source:'行情',spans:publicTrace.spans,total:publicTrace.total,errors:publicErrors});
-        const until=snapshot?.endTime-Date.now();
-        const wait=err?7000:document.hidden?13000:until>0?Math.min(4000,Math.max(400,until+80)):1200;
+        const wait=err?7000:document.hidden?13000:4000;
         timer=setTimeout(pull,wait);
       }
     }
   }
-  document.addEventListener('visibilitychange',()=>{lastRAF=0;if(document.hidden)round=null;spot.setVisible(chartUnit==='btc'&&!document.hidden);if(!document.hidden&&Date.now()-lastPull>4000&&!fetching){clearTimeout(timer);pull();}});
+  document.addEventListener('visibilitychange',()=>{
+    lastRAF=0;if(document.hidden)round=null;
+    spot.setVisible(chartUnit==='btc'&&!document.hidden);
+    if(!document.hidden&&!checkWindow()&&Date.now()-lastPull>4000&&!fetching){clearTimeout(timer);pull();}
+  });
   function inspectResult(id){
     if(statusText()[0]!=='live')return '报价待更新，本次没有新的盘口读数。';
     return panels.reading(id)||'该项公开数据尚未返回。';
@@ -2920,7 +3074,7 @@
     el('mast-holder').textContent=byId[id]?.name||'IDLE';
     const st=statusText()[0],stale=st==='stale'||st==='offline';
     updatePanels();
-    hud.render(snapshot,side,job,stale);
+    hud.render(isCurrent(snapshot)?snapshot:null,side,job,stale);
   }
   const inspectionOrder=['spotter','prior','edge','kelly','taker','closer'];
   function inspect(id,manual=true){
@@ -2998,10 +3152,10 @@
     }
   }
   window.setInterval(()=>{
+    if(windowStart(interval)!==activeStart){checkWindow();return;}
     updateCountdown();
     const st=statusText()[0];
     if(st!==el('source-state').dataset.state)render();
-    if(snapshot&&!isCurrent(snapshot)&&closedPhase!==snapshot.slug){closedPhase=snapshot.slug;stopJob();if(!fetching){clearTimeout(timer);pull();}}
   },500);
-  setChartUnit(chartUnit,false);setTour();render();pull();requestAnimationFrame(animate);
+  setChartUnit(chartUnit,false);setTour();render();scheduleExpiry();pull();requestAnimationFrame(animate);
 })();

@@ -4,7 +4,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light">
 <meta name="theme-color" content="#f3f6f8">
 <link rel="manifest" href="./manifest.webmanifest"><link rel="apple-touch-icon" href="./icon-192.png">
-<link rel="icon" href="./icon-192.png"><title>Grok Desk · Polymarket BTC 工作台</title><link rel="stylesheet" href="./desk.css?v=dc44eed3546f">
+<link rel="icon" href="./icon-192.png"><title>Grok Desk · Polymarket BTC 工作台</title><link rel="stylesheet" href="./desk.css?v=b94fb2f57796">
 </head>
 <body>
 <div class="desk" id="reactor">
@@ -12,17 +12,29 @@
   <div class="brand"><i class="brand-orb" aria-hidden="true"></i><div><h1>GROK <span>DESK</span></h1><p>SIX AGENTS · ONE BOOK · BTC UP/DOWN</p></div></div>
   <nav aria-label="跳转到面板"><a href="#live-reactor">REACTOR</a><span>/</span><a id="nav-tape" href="#live-tape">TAPE</a><span>/</span><a id="nav-trace" href="#live-trace">TRACE</a><span>/</span><a href="#strategy">SIGNALS</a></nav>
   <div class="mast-readings">
+  <div class="mast-quote-group">
   <div class="desk-benchmarks" role="group" aria-label="所选方向的一档盘口">
     <span class="reference-tag" id="mast-side">UP</span>
     <div title="最高买入挂单价"><b id="mast-bid">—</b><small>买一</small></div>
     <div class="swarm-cost" title="最低卖出挂单价"><b id="mast-ask">—</b><small>卖一</small></div>
     <div title="买一与卖一挂单份额之和"><b id="mast-size">—</b><small>一档总量 · 份</small></div>
   </div>
+  <div class="quote-provenance"><span id="quote-origin">等待本期盘口</span><span id="quote-previous" hidden></span></div>
+  </div>
   <div class="desk-clock"><time id="clock" aria-label="当前 UTC 时间">—</time><div class="window-index"><b>UTC</b><small>WIN <span id="mast-window">—</span></small></div></div>
   </div>
   <div class="display-buttons" role="group" aria-label="显示设置"><span class="size-buttons"><button id="desk-compact" type="button" aria-label="紧凑显示">−</button><button id="desk-fit" type="button">FIT</button></span><button id="desk-theme" type="button">LIGHT</button></div>
   <button id="refresh" type="button" aria-label="刷新行情" title="刷新 Polymarket 行情"><span class="online" id="source-state"><b></b><span>SWARM<br><em id="swarm-state">SYNCING</em></span></span></button>
 </header>
+<div class="quick-market" id="quick-market" role="group" aria-label="切换 BTC 合约与查看五档">
+  <div class="quick-filter" role="group" aria-label="合约周期"><small>周期</small><div>
+    <button type="button" data-interval="5m" aria-pressed="true">5m</button><button type="button" data-interval="15m" aria-pressed="false">15m</button>
+  </div></div>
+  <div class="quick-filter" role="group" aria-label="合约方向"><small>方向</small><div>
+    <button type="button" data-side="up" aria-label="Up 看涨" aria-pressed="true">Up</button><button type="button" data-side="down" aria-label="Down 看跌" aria-pressed="false">Down</button>
+  </div></div>
+  <a id="quick-depth-link" href="#live-depth">看五档 ↓</a>
+</div>
 <div class="desk-status-line" role="group" aria-label="巡检与实时行情">
   <span class="role-status"><i aria-hidden="true"></i>SIX AGENTS</span><span class="holder-reading">HOLDER <b id="mast-holder">IDLE</b></span>
   <span>LAST TRADE <b id="last-print">—</b></span><span>SPREAD <b id="mast-spread">—</b></span><span>TIME LEFT <b id="deadline">—</b></span>
@@ -71,5 +83,5 @@
 <footer id="live-footer"><span><i></i> POLYMARKET · <span id="stream-source">行情快照</span></span><span class="dispatch-hint">点击角色可分派任务</span><span class="footer-market"><span id="contract-line">正在查询本期合约</span><a id="official-market" target="_blank" rel="noopener noreferrer" hidden>官方合约 ↗</a></span></footer>
 </div>
 <canvas id="transit" aria-hidden="true"></canvas>
-<script src="./desk.js?v=c98c51bc0624" defer></script>
+<script src="./desk.js?v=4e71c44a915a" defer></script>
 </body></html>
