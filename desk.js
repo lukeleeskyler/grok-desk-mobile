@@ -661,11 +661,11 @@
     const labels = list(data.outcomes), ids = list(data.version === 'v2' ? data.positionIds : data.clobTokenIds);
     if (!Array.isArray(labels) || labels.length !== 2 || !Array.isArray(ids) || ids.length !== 2 || new Set(ids).size !== 2
       || !ids.every(t => typeof t === 'string' && /^[0-9]{1,78}$/.test(t))) throw new Error('Invalid official outcome tokens');
-    const sides = ['up','down'], tokenIds = {}, names = {};
+    const sides = ['up','down'], tokenIds = {}, names = {}, outcomeIndexes = {};
     for (const side of sides) {
       const i = labels.findIndex(label => typeof label === 'string' && label.toLowerCase() === side);
       if (i < 0) throw new Error('Missing Up/Down outcome');
-      tokenIds[side] = ids[i]; names[side] = labels[i];
+      tokenIds[side] = ids[i]; names[side] = labels[i]; outcomeIndexes[side] = i;
     }
     spans.push({name:'gamma.lookup', start:0, duration:performance.now()-origin});
     const outcomes = {}, histories = {up:[], down:[]}, warnings = [];
@@ -676,7 +676,7 @@
     const active = data.acceptingOrders === true && data.active === true && data.closed === false
       && data.enableOrderBook === true && data.archived !== true && data.tradingEligible !== false;
     const meta = {slug, title:data.question, url:'https://polymarket.com/event/' + slug,
-      startTime, endTime, interval, conditionId:data.conditionId, version:data.version, tokenIds,
+      startTime, endTime, interval, conditionId:data.conditionId, version:data.version, tokenIds, outcomeIndexes,
       resolutionSource:data.resolutionSource ?? null, description:data.description ?? null};
 
     function snapshot() {
@@ -2659,6 +2659,320 @@
 })();
 
 ;
+/* One observation is one completed Coinbase BTC-USD minute, timestamped at its close. */
+(() => {
+  'use strict';
+
+  const minute = 60000;
+  const historySize = 30;
+  const threshold = 2;
+  const emaGain = 2 / (14 + 1);
+  // Constant velocity with independent acceleration each minute. Covariances
+  // are expressed relative to the measurement variance R = 1.
+  const accelerationVariance = 0.01;
+
+  function zScore(innovation, history) {
+    let z = null;
+    if (history.length === historySize) {
+      const mean = history.reduce((sum, value) => sum + value, 0) / historySize;
+      const squares = history.reduce((sum, value) => sum + (value - mean) ** 2, 0);
+      const sigma = Math.sqrt(squares / (historySize - 1));
+      // BTC-USD's one-cent quote quantum is the minimum meaningful dispersion.
+      if (sigma >= 0.01) z = innovation / sigma;
+      history.shift();
+    }
+    history.push(innovation);
+    return z;
+  }
+
+  function crossing(model, previous, current, change) {
+    if (previous === null || current === null || Math.abs(current) > threshold) return null;
+    if (previous > threshold && change < 0) return {model, side:'down', z:current};
+    if (previous < -threshold && change > 0) return {model, side:'up', z:current};
+    return null;
+  }
+
+  function create() {
+    let level, velocity, levelVariance, covariance, velocityVariance, ema;
+    let kalmanErrors, emaErrors, last;
+
+    function reset() {
+      level = null;
+      velocity = 0;
+      levelVariance = 1;
+      covariance = 0;
+      velocityVariance = 1;
+      ema = null;
+      kalmanErrors = [];
+      emaErrors = [];
+      last = {
+        at:null, price:null, bars:0, ready:false,
+        kalman:{estimate:null, predicted:null, z:null},
+        ema:{estimate:null, predicted:null, z:null}
+      };
+    }
+
+    function step(observation) {
+      const {at, price} = observation || {};
+      if (!Number.isSafeInteger(at) || at < 0 || at % minute !== 0 ||
+          !Number.isFinite(price) || price <= 0 || (last.at !== null && at <= last.at)) {
+        return {...last, accepted:false, signals:[]};
+      }
+      if (last.at !== null && at - last.at !== minute) reset();
+      if (last.at === null) {
+        level = ema = price;
+        last = {
+          at, price, bars:1, ready:false,
+          kalman:{estimate:price, predicted:null, z:null},
+          ema:{estimate:price, predicted:null, z:null}
+        };
+        return {...last, accepted:true, signals:[]};
+      }
+
+      const predicted = level + velocity;
+      const innovation = price - predicted;
+      const kalmanZ = zScore(innovation, kalmanErrors);
+      // P_prior = F P F' + Q, with F = [[1, 1], [0, 1]] and
+      // Q = accelerationVariance * [[1/4, 1/2], [1/2, 1]].
+      const predictedLevelVariance = levelVariance + 2 * covariance + velocityVariance + accelerationVariance / 4;
+      const predictedCovariance = covariance + velocityVariance + accelerationVariance / 2;
+      const predictedVelocityVariance = velocityVariance + accelerationVariance;
+      const observationVariance = predictedLevelVariance + 1;
+      const levelGain = predictedLevelVariance / observationVariance;
+      const velocityGain = predictedCovariance / observationVariance;
+      level = predicted + levelGain * innovation;
+      velocity += velocityGain * innovation;
+      levelVariance = (1 - levelGain) * predictedLevelVariance;
+      covariance = (1 - levelGain) * predictedCovariance;
+      velocityVariance = predictedVelocityVariance - velocityGain * predictedCovariance;
+
+      const predictedEma = ema;
+      const emaInnovation = price - predictedEma;
+      const emaZ = zScore(emaInnovation, emaErrors);
+      ema += emaGain * emaInnovation;
+
+      const change = price - last.price;
+      const signals = [
+        crossing('Kalman', last.kalman.z, kalmanZ, change),
+        crossing('EMA', last.ema.z, emaZ, change)
+      ].filter(Boolean);
+      last = {
+        at, price, bars:last.bars + 1, ready:kalmanZ !== null && emaZ !== null,
+        kalman:{estimate:level, predicted, z:kalmanZ},
+        ema:{estimate:ema, predicted:predictedEma, z:emaZ}
+      };
+      return {...last, accepted:true, signals};
+    }
+
+    reset();
+    return {step, reset};
+  }
+
+  if (typeof module !== "undefined" && module.exports) module.exports = {create};
+  if (typeof window !== "undefined") window.ReversalEngine = {create};
+})();
+
+;
+/* Foreground, read-only view over confirmed candles and the current contract's book. */
+(() => {
+  'use strict';
+  const minute = 60000;
+  const finite = Number.isFinite;
+  const time = new Intl.DateTimeFormat('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
+  const hm = new Intl.DateTimeFormat('zh-CN', {hour:'2-digit', minute:'2-digit', hour12:false});
+  const money = new Intl.NumberFormat('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const cents = new Intl.NumberFormat('zh-CN', {maximumFractionDigits:3});
+  const sideName = side => side === 'up' ? '买涨（Up）' : '买跌（Down）';
+  const zText = z => finite(z) ? (z > 0 ? '+' : '') + z.toFixed(2) : '—';
+
+  function createMinuteReader() {
+    let engine = window.ReversalEngine.create();
+    let processed = [], previous = null, latest = null;
+    let sourceRows, lastMinute;
+    return (rows, cutoff) => {
+      if (rows === sourceRows && cutoff === lastMinute) return {previous,latest};
+      sourceRows = rows;
+      lastMinute = cutoff;
+      const confirmed = (rows || []).filter(bar => bar.confirmed === true && Number.isSafeInteger(bar.t) &&
+        bar.t % minute === 0 && bar.t + minute <= cutoff && finite(bar.c) && bar.c > 0);
+      // A rolling REST window can drop leading rows. Preserve the running filter if
+      // the overlap is identical; replay if a close was corrected or a gap backfilled.
+      const priorTail = processed.filter(bar => confirmed.length && bar.t >= confirmed[0].t);
+      const overlapIsUnchanged = priorTail.length > 0 && priorTail.every((bar, i) =>
+        confirmed[i]?.t === bar.t && confirmed[i].c === bar.c);
+      if (!overlapIsUnchanged) {
+        engine.reset();
+        latest = previous = null;
+      }
+      for (let i = overlapIsUnchanged ? priorTail.length : 0; i < confirmed.length; ++i) {
+        const bar = confirmed[i];
+        const step = engine.step({at:bar.t + minute, price:bar.c});
+        if (!step.accepted) continue;
+        previous = latest?.at === step.at - minute ? latest : null;
+        latest = step;
+      }
+      processed = confirmed;
+      return {previous,latest};
+    };
+  }
+
+  function usableOffer(market, side, close, now) {
+    const book = market.outcomes?.[side];
+    if (!book?.bookAvailable || book.bookSource === 'last-websocket' ||
+        (market.tokenIds && book.tokenId !== market.tokenIds[side]) || !finite(book.at) ||
+        book.at < close || book.at < now - 10000 || book.at >= market.endTime || book.at > now + 3000) return null;
+    const [price, size] = book.asks?.[0] || [];
+    const bid = book.bids?.[0]?.[0];
+    if (!finite(price) || price <= 0 || price >= 1 || !finite(size) || size <= 0 || (finite(bid) && bid > price)) return null;
+    return {ask:price, bookAt:book.at};
+  }
+
+  function createEvaluator() {
+    const read = createMinuteReader();
+    return (context, now) => {
+      const {market, interval, spot, blockedReason} = context;
+      const result = {reason:'', window:null, previous:null, latest:null, intent:null};
+      if (interval !== '5m' && interval !== '15m') {
+        result.reason = '请选择 BTC 5m 或 15m 合约。';
+        return result;
+      }
+      const windowMs = (interval === '15m' ? 15 : 5) * minute;
+      const start = Math.floor(now / windowMs) * windowMs;
+      if (!market || market.interval !== interval || !market.conditionId || market.startTime !== start || market.endTime !== start + windowMs) {
+        result.reason = '正在等待当期合约资料。';
+        return result;
+      }
+      result.window = [market.startTime, market.endTime];
+      const close = Math.floor(now / minute) * minute;
+      if (close <= start) {
+        result.reason = '等待本期第一根 1 分钟 K 线收盘。';
+        return result;
+      }
+      const {previous, latest} = read(spot?.candles, close);
+      if (!latest || latest.at !== close) {
+        result.reason = '等待 Coinbase 确认 '+time.format(close)+' 的分钟收盘价。';
+        return result;
+      }
+      result.previous = previous;
+      result.latest = latest;
+      if (!previous || !latest.ready || !finite(previous.kalman.z) || !finite(previous.ema.z)) {
+        result.reason = latest.bars < 33 ? '模型预热中，已有 '+latest.bars+' 根连续收盘 K 线，需要至少 33 根。' : '近期价格波动不足，尚无可比较的两组 Z 值。';
+        return result;
+      }
+      const k = latest.signals.find(s => s.model === 'Kalman');
+      const e = latest.signals.find(s => s.model === 'EMA');
+      if (!k || !e || k.side !== e.side) {
+        if (k && e) result.reason = '两个模型方向相反，等待同一根收盘 K 线出现同向信号。';
+        else if (k || e) {
+          const only = k || e;
+          result.reason = '只有 '+only.model+' 触发'+(only.side === 'up' ? '看涨' : '看跌')+'回撤信号，等待两个模型同向确认。';
+        } else result.reason = '这根收盘 K 线没有触发回撤。规则要求 Z 从 ±2 之外回到区间内，且收盘价向相反方向移动。';
+        return result;
+      }
+      if (blockedReason || !market.acceptingOrders) {
+        result.reason = blockedReason || '当前合约尚未开放委托。';
+        return result;
+      }
+      const offer = usableOffer(market, k.side, close, now);
+      if (!offer) {
+        result.reason = '两个模型均触发'+(k.side === 'up' ? '看涨' : '看跌')+'，等待信号后 '+k.side.toUpperCase()+' 方向的有效卖一（10 秒内）。';
+        return result;
+      }
+      result.intent = {side:k.side, interval, conditionId:market.conditionId, signalAt:close, ...offer};
+      result.reason = k.side === 'up'
+        ? '两个模型的 Z 均从 −2 以下回到区间内，BTC 收盘价回升。'
+        : '两个模型的 Z 均从 +2 以上回到区间内，BTC 收盘价回落。';
+      return result;
+    };
+  }
+
+  function element(tag, cls, text) {
+    const node = document.createElement(tag);
+    node.className = cls;
+    if (text) node.textContent = text;
+    return node;
+  }
+  function setText(node, text) {
+    if (node.textContent !== text) node.textContent = text;
+  }
+  const modelText = (model, previous, latest) => {
+    const signal = latest.signals.find(s => s.model.toLowerCase() === model);
+    return 'Z '+zText(previous?.[model]?.z)+' → '+zText(latest[model].z)+' · '+(signal ? (signal.side === 'up' ? '看涨' : '看跌') : '未触发');
+  };
+
+  window.createDeskAdvice = function createDeskAdvice({host, onReview, getContext, actionLabel = '核对建议'}) {
+    const evaluate = createEvaluator();
+    let lastContext = {}, displayed = null;
+    host.classList.add('desk-advice');
+    const row = element('div','advice-top');
+    const title = element('h2','advice-title','本期建议');
+    const direction = element('strong','advice-direction','观望');
+    direction.dataset.advice = 'direction';
+    const contract = element('span','advice-contract');
+    row.append(title,direction,contract);
+    const reason = element('p','advice-reason');
+    reason.dataset.advice = 'reason';
+    const readings = element('div','advice-readings');
+    const fields = {};
+    for (const [key,label] of [['kalman','Kalman'],['ema','EMA 14']]) {
+      const cell = element('div','advice-model');
+      fields[key] = element('span','advice-z');
+      cell.append(element('b','advice-model-name',label),fields[key]);
+      readings.append(cell);
+    }
+    const footer = element('div','advice-foot');
+    const evidence = element('span','advice-evidence');
+    const button = element('button','advice-review',typeof actionLabel === 'string' ? actionLabel : '');
+    button.type = 'button';
+    button.dataset.advice = 'review';
+    footer.append(evidence, button);
+    const periodNote = element('p','advice-period-note','15m 沿用 1 分钟回撤信号，暂无单独验证。');
+    host.replaceChildren(row,reason,readings,footer,periodNote);
+
+    function update(context) {
+      lastContext = context;
+      const result = evaluate(context, context.now ?? Date.now());
+      const {intent, latest, previous} = result;
+      displayed = intent;
+      host.dataset.side = intent?.side || 'wait';
+      setText(direction, intent ? '建议'+sideName(intent.side) : '观望');
+      const period = result.window ? ' · '+hm.format(result.window[0])+'–'+hm.format(result.window[1]) : '';
+      setText(contract, 'BTC · '+(context.interval || '5m').toUpperCase()+period);
+      periodNote.hidden = context.interval !== '15m';
+      setText(reason, result.reason);
+      readings.hidden = !latest;
+      if (latest) {
+        for (const key of ['kalman','ema']) setText(fields[key],modelText(key,previous,latest));
+      }
+      const source = 'Coinbase BTC/USD · 1 分钟收盘';
+      let details = source;
+      if (latest) {
+        const prices = (previous ? '$'+money.format(previous.price)+' → ' : '')+'$'+money.format(latest.price);
+        details = source+' '+time.format(latest.at)+' · '+prices;
+      }
+      if (intent) details += ' ｜ '+intent.side.toUpperCase()+' 卖一 '+cents.format(intent.ask*100)+'¢ · '+time.format(intent.bookAt);
+      setText(evidence,details);
+      if (intent && typeof actionLabel === 'function') setText(button,actionLabel(intent.side));
+      button.hidden = !intent || typeof onReview !== 'function';
+      button.disabled = button.hidden;
+    }
+    const latestContext = () => getContext ? getContext() : lastContext;
+    function current() {
+      const context = latestContext();
+      return evaluate(context, context.now ?? Date.now()).intent;
+    }
+    button.addEventListener('click', () => {
+      const old = displayed;
+      const context = latestContext();
+      update(context);
+      if (old && displayed && old.side === displayed.side && old.conditionId === displayed.conditionId &&
+          old.signalAt === displayed.signalAt && !button.disabled) onReview({...displayed});
+    });
+    return {update,current};
+  };
+})();
+
+;
 /* Read the published research snapshot once. All quotes are handled separately. */
 (() => {
   'use strict';
@@ -2828,7 +3142,29 @@
     const current=options.findIndex(([,trace])=>trace===displayedTrace());
     traceChoice=options[(current+1)%options.length][0];updatePanels();
   });
-  const spot=window.createBTCSpot(state=>{spotData=state;if(chartUnit==='btc')updatePanels();});
+  function adviceContext(){
+    return {market:snapshot, interval, spot:spotData, blockedReason:err?'合约资料刷新失败，等待最新行情。':''};
+  }
+  const advice=window.createDeskAdvice({
+    host:el('desk-advice'),
+    actionLabel:direction=>'到 Polymarket 核对'+(direction==='up'?'买涨':'买跌'),
+    getContext:adviceContext,
+    onReview(intent){
+      const market=snapshot;
+      const index=market?.outcomeIndexes?.[intent.side];
+      if(!isCurrent(market)||market.conditionId!==intent.conditionId||market.interval!==intent.interval||
+          ![0,1].includes(index)||!['up','down'].includes(intent.side))return;
+      setSide(intent.side);
+      const url=new URL('/event/'+market.slug,'https://polymarket.com');
+      url.searchParams.set('outcomeIndex',String(index));
+      window.location.assign(url.href);
+    }
+  });
+  const spot=window.createBTCSpot(state=>{
+    spotData=state;
+    advice.update(adviceContext());
+    if(chartUnit==='btc')updatePanels();
+  });
   const stream=window.createPMStream(s=>{
     if(!snapshot||s.conditionId!==snapshot.conditionId||!isCurrent(s))return;
     snapshot=s;render();
@@ -2864,7 +3200,7 @@
     if(chartUnit!==unit)round=null;
     chartUnit=unit;if(remember)save('chart-unit',unit);
     for(const b of document.querySelectorAll('[data-chart-unit]'))b.setAttribute('aria-pressed',String(b.dataset.chartUnit===unit));
-    spot.setVisible(unit==='btc'&&!document.hidden);
+    spot.setVisible(!document.hidden);
     updatePanels();
   }
   for(const b of document.querySelectorAll('[data-chart-unit]'))b.addEventListener('click',()=>setChartUnit(b.dataset.chartUnit));
@@ -2964,6 +3300,7 @@
     previous.textContent=quote&&prior?priorLabel+' · 买一 '+cents(prior.bids[0]?.[0])+' / 卖一 '+cents(prior.asks[0]?.[0]):'';
   }
   function render(){
+    advice.update(adviceContext());
     const [status,label]=statusText();const s=isCurrent(snapshot)?snapshot:null;
     if(status!=='live')round=null;
     el('source-state').dataset.state=status;
@@ -3063,7 +3400,7 @@
   }
   document.addEventListener('visibilitychange',()=>{
     lastRAF=0;if(document.hidden)round=null;
-    spot.setVisible(chartUnit==='btc'&&!document.hidden);
+    spot.setVisible(!document.hidden);
     if(!document.hidden&&!checkWindow()&&Date.now()-lastPull>4000&&!fetching){clearTimeout(timer);pull();}
   });
   function inspectResult(id){
@@ -3153,6 +3490,7 @@
   }
   window.setInterval(()=>{
     if(windowStart(interval)!==activeStart){checkWindow();return;}
+    advice.update(adviceContext());
     updateCountdown();
     const st=statusText()[0];
     if(st!==el('source-state').dataset.state)render();

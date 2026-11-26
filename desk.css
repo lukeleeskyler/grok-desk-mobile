@@ -850,3 +850,40 @@ html[data-desk-theme=dark] .strategy .loss {color:#ff92ad;}
   }
   #live-lower .pmd-tape .pmd-breakdown div { display: flex; flex-direction: column-reverse; }
 }
+
+.desk-advice {
+  margin-block:6px;padding:9px 12px;
+  border:1px solid var(--line,#cbd2db);border-radius:5px;
+  background:var(--paper,#fbfcfd);color:var(--ink,#171c26);
+  font:500 13px/1.45 var(--sans,system-ui,sans-serif);
+}
+.desk-advice .advice-readings[hidden],.desk-advice [hidden] {display:none;}
+.desk-advice .advice-top,.desk-advice .advice-readings,.desk-advice .advice-foot {
+  display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;
+}
+.desk-advice .advice-title {margin:0;font-size:14px;font-weight:730;}
+.desk-advice .advice-direction {font-size:15px;color:var(--muted,#606975);}
+.desk-advice[data-side=up] .advice-direction {color:var(--green,#07836f);}
+.desk-advice[data-side=down] .advice-direction {color:#a72e56;}
+html[data-desk-theme=dark] .desk-advice[data-side=down] .advice-direction {color:#ff9ab6;}
+.desk-advice .advice-contract {margin-left:auto;font:650 11px var(--mono,monospace);color:var(--muted,#606975);}
+.desk-advice .advice-reason {margin:5px 0;color:var(--ink,#171c26);overflow-wrap:anywhere;}
+.desk-advice .advice-model,.desk-advice .advice-foot,.desk-advice .advice-period-note {
+  font-size:12px;color:var(--muted,#606975);font-variant-numeric:tabular-nums;
+}
+.desk-advice .advice-model-name {margin-right:6px;color:var(--ink,#171c26);}
+.desk-advice .advice-z {white-space:normal;overflow-wrap:anywhere;}
+.desk-advice .advice-foot {margin-top:6px;align-items:center;}
+.desk-advice .advice-evidence {min-width:0;overflow-wrap:anywhere;}
+.desk-advice .advice-period-note {margin:3px 0 0;}
+.desk-advice .advice-review {
+  margin-left:auto;border:1px solid var(--head-green,#147d67);border-radius:4px;
+  background:var(--head-soft,#dfefe9);color:var(--head-green,#147d67);
+  padding:5px 10px;cursor:pointer;font:650 12px var(--sans,system-ui,sans-serif);
+}
+.desk-advice .advice-review:focus-visible {outline:2px solid currentColor;outline-offset:2px;}
+@media(max-width:600px) {
+  .desk-advice {padding:8px 10px;}
+  .desk-advice .advice-readings {gap:3px 12px;}
+  .desk-advice .advice-review {min-height:38px;}
+}
