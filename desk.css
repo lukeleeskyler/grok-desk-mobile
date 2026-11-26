@@ -354,6 +354,32 @@ html[data-desk-theme=dark] .poly-trade a{color:#83cadf}
 @media(prefers-reduced-motion:reduce){.trace-cursor{animation:none}}
 @media(max-width:680px){.trace .trace-list .event{height:20px;font-size:8px;column-gap:3px}.trace-terminal{font-size:8px}}
 
+/* In the three-column layout, the station must fit the taller of the field and its instruments. */
+@media (min-width:681px) {
+  .reactor-panel .station {
+    height:auto;
+    min-height:clamp(280px,27vw,399px);
+  }
+  html[data-desk-density=compact] .reactor-panel .station {
+    height:auto;
+    min-height:clamp(260px,26vh,295px);
+  }
+  .station .reactor-art {min-height:clamp(220px,21vw,308px);}
+  html[data-desk-density=compact] .station .reactor-art {min-height:clamp(205px,18vw,240px);}
+  .station .command .ticket {min-height:min-content;}
+}
+
+@media (max-width:680px) {
+  /* The local workstation shares a grid track with wide ledger and trading tools. */
+  #markets > .reactor-panel:has(button.ticket) {max-width:calc(100vw - 10px);}
+  .reactor-panel:has(button.ticket) .station aside {max-height:none;}
+  .reactor-panel:has(button.ticket) .station .command {grid-template-rows:auto auto auto auto;max-height:none;}
+  .reactor-panel:has(button.ticket) .command .ticket {min-height:min-content;}
+  .reactor-panel:has(button.ticket) .command .motion-stream {max-height:none;min-height:45px;}
+  .reactor-panel:has(button.ticket) .command .motion-events {grid-template-rows:repeat(3,minmax(10px,auto));}
+  .reactor-panel:has(button.ticket) .command .motion-row:nth-child(3) {display:grid;}
+}
+
 .strategy {
   --signal-ink:#17202c; --signal-muted:#596574; --signal-line:#ccd5de; --signal-paper:#fff;
   background:var(--signal-paper); border:1px solid var(--signal-line); border-radius:5px;
