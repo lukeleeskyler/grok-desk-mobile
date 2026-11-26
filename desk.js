@@ -1083,6 +1083,79 @@
 })();
 
 ;
+/* Keep the phone depth table on the same quote and scan target as the original tape. */
+(() => {
+  'use strict';
+  const narrow = matchMedia('(max-width: 900px)');
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const layouts = new WeakMap();
+
+  function buildTable(panel) {
+    const region = document.createElement('div');
+    region.className = 'mobile-depth';
+    const table = document.createElement('table');
+    const caption = table.createCaption();
+    const head = table.createTHead().insertRow();
+    for (const label of ['买价 (¢)', '数量 (份)', '卖价 (¢)', '数量 (份)']) {
+      const cell = document.createElement('th');
+      cell.scope = 'col';
+      cell.textContent = label;
+      head.append(cell);
+    }
+    const body = table.createTBody();
+    const rows = Array.from({length: 5}, () => {
+      const row = body.insertRow();
+      return Array.from({length: 4}, () => row.insertCell());
+    });
+    region.append(table, panel.targets.taker);
+    panel.targets.taker.style.left = '73%';
+    panel.targets.taker.style.top = '32%';
+    panel.chart.after(region);
+    return {region, caption, rows};
+  }
+
+  function drawBook(panel, book, model, formatSize, formatPrice) {
+    let layout = layouts.get(panel);
+    if (!narrow.matches) {
+      if (layout) {
+        panel.chart.append(panel.targets.taker);
+        layout.region.remove();
+        layouts.delete(panel);
+      }
+      return false;
+    }
+    if (!layout) {
+      layout = buildTable(panel);
+      layouts.set(panel, layout);
+    }
+    const status = !book.available ? '等待盘口' : model.stale ? '上次盘口' : '五档盘口';
+    const caption = model.side.toUpperCase() + ' · ' + status + '　中间价 ' + formatPrice(book.mid);
+    if (layout.caption.textContent !== caption) layout.caption.textContent = caption;
+    const bids = book.bids.slice(0, 5);
+    const asks = book.asks.slice(0, 5);
+    const peak = Math.max(1, ...bids.map(level => level[1]), ...asks.map(level => level[1]));
+    for (const [index, cells] of layout.rows.entries()) {
+      for (const [side, level] of [bids[index], asks[index]].entries()) {
+        const price = level ? formatPrice(level[0]) : '—';
+        const size = level ? formatSize(level[1], 2) : '—';
+        const priceCell = cells[side * 2], sizeCell = cells[side * 2 + 1];
+        if (priceCell.textContent !== price) priceCell.textContent = price;
+        if (sizeCell.textContent !== size) {
+          if (sizeCell.textContent && !reducedMotion.matches && panel.visible) {
+            sizeCell.animate([{opacity: .52}, {opacity: 1}], {duration: 170});
+          }
+          sizeCell.textContent = size;
+        }
+        const depth = (level ? (100 * level[1] / peak).toFixed(1) : '0') + '%';
+        if (sizeCell.style.getPropertyValue('--depth') !== depth) sizeCell.style.setProperty('--depth', depth);
+      }
+    }
+    return true;
+  }
+  window.GrokMobilePanels = {narrow, drawBook};
+})();
+
+;
 (() => {
   'use strict';
   const mono = '"SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace';
@@ -1189,11 +1262,12 @@
 
   function pen(canvas,w,h){
     const c=canvas.getContext('2d');if(!c)return null;
+    const minText=window.GrokMobilePanels.narrow.matches?10:0;
     const dx=canvas.width/w,dy=canvas.height/h;c.setTransform(dx,0,0,dy,0,0);c.clearRect(0,0,w,h);
     const line=(pts,color,width=1,dash=[])=>{if(!pts.length)return;c.beginPath();pts.forEach(([x,y],i)=>i?c.lineTo(x,y):c.moveTo(x,y));c.strokeStyle=color;c.lineWidth=width;c.setLineDash(dash);c.stroke();c.setLineDash([]);};
     const fill=(pts,color)=>{if(!pts.length)return;c.beginPath();pts.forEach(([x,y],i)=>i?c.lineTo(x,y):c.moveTo(x,y));c.closePath();c.fillStyle=color;c.fill();};
     const dot=(x,y,col,r=2)=>{c.beginPath();c.fillStyle=col;c.arc(x,y,r,0,Math.PI*2);c.fill();};
-    const txt=(s,x,y,col=muted,size=7,align='left',weight=500)=>{c.font=weight+' '+size+'px '+font;c.fillStyle=col;c.textAlign=align;c.textBaseline='middle';c.fillText(String(s),x,y);};
+    const txt=(s,x,y,col=muted,size=7,align='left',weight=500)=>{c.font=weight+' '+Math.max(size,minText)+'px '+font;c.fillStyle=col;c.textAlign=align;c.textBaseline='middle';c.fillText(String(s),x,y);};
     const rect=(x,y,w,h,col)=>{c.fillStyle=col;c.fillRect(x,y,w,h);};
     const gr=(y0,y1,a,b)=>{const g=c.createLinearGradient(0,y0,0,y1);g.addColorStop(0,a);g.addColorStop(1,b);return g;};
     return {c,w,h,line,fill,dot,txt,rect,gr};
@@ -1389,7 +1463,8 @@
     reading.spotter=isBTC?(latest?'BTC/USD 最近分钟报价 '+dollars(latest.p)+' · '+time(latest.t)+' UTC'+(spot.stale?'（上次观测）。':'。'):'等待真实 BTC/USD 分钟 K 线。'):(latest?dir+' 最新报价样本 '+cents(latest.p)+' · '+time(latest.t,true)+' UTC。':'暂无 '+dir+' 历史报价。');
     reading.taker=b.asks.length?dir+(m.stale?' 上次盘口卖一 ':' 卖一 ')+cents(b.asks[0][0])+'，挂单 '+fmt(b.asks[0][1],4)+' 份。':'当前方向暂无有效卖单。';
     const {w,h,c,txt,dot,rect,fill,line,gr}=g;
-    const bookW=Math.max(67,w*.24),bookX=w-bookW,axisW=isBTC?(w>400?55:44):(w>400?32:25),x0=4,x1=bookX-axisW-3,top=h>75?13:6,base=h-10,volH=Math.max(6,(base-top)*.15),bottom=Math.max(top+10,base-volH-4);
+    const stackedBook=window.GrokMobilePanels.drawBook(p,b,m,fmt,cents);
+    const bookW=stackedBook?0:Math.max(67,w*.24),bookX=w-bookW,axisW=stackedBook?(isBTC?75:46):(isBTC?(w>400?55:44):(w>400?32:25)),x0=4,x1=bookX-axisW-3,top=h>75?13:6,base=h-10,volH=Math.max(6,(base-top)*.15),bottom=Math.max(top+10,base-volH-4);
     p.chart.deskScanZones={spotter:[x0,top,x1,bottom],taker:[bookX+2,9,w-2,h-2]};
     if(rows.length){
       const [a,z]=range([...rows.map(v=>v.l),...rows.map(v=>v.h),...metrics.vw.filter(finite),...(finite(headline)?[headline]:[])],.10,isBTC?.01:.005);
@@ -1425,6 +1500,7 @@
     }else{
       gridY(g,x0,x1,top,bottom,4);txt(isBTC?'等待 BTC/USD 分钟 K 线':'等待 '+dir+' 历史价格点',(x0+x1)/2,(top+bottom)/2,muted,8,'center');mark(p,'spotter',x1*.72,h*.5);
     }
+    if(stackedBook){p.flashes=[];return;}
     rect(bookX,0,1,h,'#d6dce4');txt('ORDER BOOK',bookX+4,5,navy,7,'left',700);if(bookW>96)txt(dir+' ¢ · 份',w-3,5,muted,6.5,'right');
     if(m.stale)txt('过期',w-3,h-3,'#aa7729',6,'right');
     const n=h>=72?5:3,bids=b.bids.slice(0,n),asks=b.asks.slice(0,n).reverse(),rowH=Math.max(4,(h-15)/(n*2+1)),midY=10+(n+.5)*rowH;
@@ -1914,6 +1990,7 @@
       flashes.get(node)?.cancel();
       flashes.set(node,node.animate([{backgroundColor:color,transform:'translateY(-1px)'},{backgroundColor:'transparent',transform:'translateY(0)'}],{duration:660,easing:'ease-out'}));
     }
+    const narrowEvents=matchMedia('(max-width:900px)');
     function enqueueRow(label,text,color,at){
       const row=element('div','motion-row'),t=element('time','',clock.format(at));
       row.dataset.update=label;t.dateTime=new Date(at).toISOString();
@@ -1921,7 +1998,10 @@
       row.title=clock.format(at)+' UTC · '+label+' · '+text;
       const moving=[...list.children].slice(0,2),step=moving[0]?.getBoundingClientRect().height||9;
       list.prepend(row);while(list.children.length>3)list.lastElementChild.remove();
-      if(!reduced.matches && row.animate){
+      if(!reduced.matches && row.animate && narrowEvents.matches){
+        // Prices can change multiple times within one frame. Keep wrapped rows in their own cells.
+        row.animate([{opacity:.72},{opacity:1}],{duration:170,easing:'ease-out'});
+      }else if(!reduced.matches && row.animate){
         row.animate([{opacity:.2,transform:'translateY(-4px)'},{opacity:1,transform:'translateY(0)'}],{duration:370,easing:'ease-out'});
         for(const e of moving)e.animate([{transform:'translateY(-'+step+'px)'},{transform:'translateY(0)'}],{duration:370,easing:'ease-out'});
       }
@@ -2026,8 +2106,8 @@
       lastGeo=now;
       const root=station.getBoundingClientRect(),a=relative(art.getBoundingClientRect(),root);
       const r=Math.min(a.w*.316,a.h*.5),cx=a.x+a.w*.5,cy=a.y+a.h*.532;
-      const mobile=window.matchMedia('(max-width:680px)').matches;
       const feedRects=feedList.map(el=>relative(el.getBoundingClientRect(),root));
+      const mobile=feedRects[0].y >= a.y + a.h - 1;
       const routes=feedRects.map((f,i)=>{
         const left=mobile?Math.max(a.x+11,Math.min(cx-r*.25,f.x+f.w*.72)):f.x+f.w+4;
         const y=mobile?f.y-1:f.y+f.h*.5;
@@ -2521,18 +2601,26 @@
     title.append(node('h3', model.name), node('small', model.signals + ' 个信号'));
     box.append(title);
     const signal = model.latestSignal;
+    const signalGroup = node('div', null, 'model-signal-group');
     const line = node('div', null, 'model-signal');
     line.append(node('small', '最近信号'), node('b', signal ? outcome(signal.side) : '尚无信号'),
       node('time', signal ? stamp(signal.at) : ''));
-    box.append(line);
-    if (signal) box.append(node('p', signal.entered ? '已记录模拟入场' : signal.entryStatus, 'model-reason'));
+    signalGroup.append(line);
+    if (signal) signalGroup.append(node('p', signal.entered ? '已记录模拟入场' : signal.entryStatus, 'model-reason'));
     const result = model.latestResult;
+    const resultGroup = node('div', null, 'model-result-group');
     const settled = node('div', null, 'model-settled');
     settled.append(node('small', '最近模拟结算'), amount(result?.settlementNetUsd));
     if (Number.isFinite(result?.exit1mNetUsd)) {
       settled.title = '同一信号按 1 分钟退出的模拟净盈亏 ' + money.format(result.exit1mNetUsd);
     }
-    box.append(settled, node('p', result ? stamp(result.at) + ' · ' + outcome(result.side) + '信号' : '暂无已结算样本', 'model-event-time'));
+    resultGroup.append(settled, node('p', result ? stamp(result.at) + ' · ' + outcome(result.side) + '信号' : '暂无已结算样本', 'model-event-time'));
+    if (Number.isFinite(result?.exit1mNetUsd)) {
+      const exit = node('p', '同笔 1 分钟退出 ', 'model-exit');
+      exit.append(amount(result.exit1mNetUsd));
+      resultGroup.append(exit);
+    }
+    box.append(signalGroup, resultGroup);
     return box;
   }
   function totals(snapshot) {
