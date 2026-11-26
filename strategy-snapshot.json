@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "asOf": "2026-11-25T10:34:46Z",
+  "exportedAt": "2026-11-26T01:41:05Z",
+  "paused": true,
+  "market": "BTC 5m",
+  "sharesPerEntry": 10,
+  "models": [
+    {
+      "name": "Kalman",
+      "signals": 11,
+      "entries": 2,
+      "exit1m": {
+        "samples": 1,
+        "netUsd": -1.0626,
+        "wins": 0,
+        "losses": 1
+      },
+      "settlement": {
+        "samples": 2,
+        "netUsd": 6.051,
+        "wins": 1,
+        "losses": 1
+      },
+      "latestSignal": {
+        "at": "2026-11-25T10:08:01Z",
+        "side": "up",
+        "entered": false,
+        "entryStatus": "卖一缺失或不足 10 份",
+        "exit1mNetUsd": null,
+        "settlementNetUsd": null
+      },
+      "latestResult": {
+        "at": "2026-11-25T06:03:01Z",
+        "side": "up",
+        "entered": true,
+        "entryStatus": "已记录入场",
+        "exit1mNetUsd": -1.0626,
+        "settlementNetUsd": -1.2528
+      }
+    },
+    {
+      "name": "EMA",
+      "signals": 15,
+      "entries": 5,
+      "exit1m": {
+        "samples": 5,
+        "netUsd": 7.8871,
+        "wins": 5,
+        "losses": 0
+      },
+      "settlement": {
+        "samples": 5,
+        "netUsd": 17.5758,
+        "wins": 5,
+        "losses": 0
+      },
+      "latestSignal": {
+        "at": "2026-11-25T10:06:01Z",
+        "side": "down",
+        "entered": true,
+        "entryStatus": "已记录入场",
+        "exit1mNetUsd": 1.96025,
+        "settlementNetUsd": 2.79705
+      },
+      "latestResult": {
+        "at": "2026-11-25T10:06:01Z",
+        "side": "down",
+        "entered": true,
+        "entryStatus": "已记录入场",
+        "exit1mNetUsd": 1.96025,
+        "settlementNetUsd": 2.79705
+      }
+    }
+  ]
+}

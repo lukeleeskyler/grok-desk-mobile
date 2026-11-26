@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light">
+<meta name="theme-color" content="#f3f6f8">
+<link rel="manifest" href="./manifest.webmanifest"><link rel="apple-touch-icon" href="./icon-192.png">
+<link rel="icon" href="./icon-192.png"><title>Grok Desk · Polymarket BTC 工作台</title><link rel="stylesheet" href="./desk.css?v=52a0a7910e4d">
+</head>
+<body>
+<div class="desk" id="reactor">
+<header class="mast">
+  <div class="brand"><i class="brand-orb" aria-hidden="true"></i><div><h1>GROK <span>DESK</span></h1><p>SIX AGENTS · ONE BOOK · BTC UP/DOWN</p></div></div>
+  <nav aria-label="跳转到面板"><a href="#reactor">REACTOR</a><span>/</span><a id="nav-tape" href="#live-tape">TAPE</a><span>/</span><a id="nav-trace" href="#live-trace">TRACE</a><span>/</span><a href="#strategy">SIGNALS</a></nav>
+  <div class="desk-benchmarks" role="group" aria-label="所选方向的一档盘口">
+    <span class="reference-tag" id="mast-side">UP</span>
+    <div title="最高买入挂单价"><b id="mast-bid">—</b><small>买一</small></div>
+    <div class="swarm-cost" title="最低卖出挂单价"><b id="mast-ask">—</b><small>卖一</small></div>
+    <div title="买一与卖一挂单份额之和"><b id="mast-size">—</b><small>一档总量 · 份</small></div>
+  </div>
+  <div class="desk-clock"><time id="clock" aria-label="当前 UTC 时间">—</time><div class="window-index"><b>UTC</b><small>WIN <span id="mast-window">—</span></small></div></div>
+  <div class="display-buttons" role="group" aria-label="显示设置"><span class="size-buttons"><button id="desk-compact" type="button" aria-label="紧凑显示">−</button><button id="desk-fit" type="button">FIT</button></span><button id="desk-theme" type="button">LIGHT</button></div>
+  <button id="refresh" type="button" aria-label="刷新行情" title="刷新 Polymarket 行情"><span class="online" id="source-state"><b></b><span>SWARM<br><em id="swarm-state">SYNCING</em></span></span></button>
+</header>
+<div class="desk-status-line" role="group" aria-label="巡检与实时行情">
+  <span class="role-status"><i aria-hidden="true"></i>SIX AGENTS</span><span class="holder-reading">HOLDER <b id="mast-holder">IDLE</b></span>
+  <span>LAST TRADE <b id="last-print">—</b></span><span>SPREAD <b id="mast-spread">—</b></span><span>TIME LEFT <b id="deadline">—</b></span>
+  <div class="desk-run-tools"><button class="speed" id="speed" type="button" aria-label="切换巡检动画速度" title="切换巡检动画速度">1×</button><button class="pause" id="tour" type="button" aria-pressed="false"><i aria-hidden="true"></i><span>暂停巡检</span></button></div>
+</div>
+<div class="market-ribbon"><span class="live-label"><i></i> LIVE WIRE</span><div class="ribbon-window"><div id="ribbon"></div></div><span class="market-pair">BTC / POLYMARKET</span></div>
+<section class="strategy" id="strategy" aria-labelledby="strategy-title">
+  <div class="strategy-head"><h2 id="strategy-title"><i></i> 策略快照 <small>BTC · 5M</small></h2><span class="snapshot-status">采集已暂停</span><time id="strategy-time"></time></div>
+  <div id="strategy-models" class="strategy-models"><p role="status">正在读取最近一次结果…</p></div>
+  <details id="strategy-details" hidden><summary>查看样本与估算净盈亏</summary><div id="strategy-totals"></div></details>
+</section>
+<section class="roster" id="roster" aria-label="六个角色，点击巡检对应行情"></section>
+<main id="markets">
+<section class="reactor-panel" aria-label="彩色线环与角色任务">
+  <div class="panel-head"><h2><i></i> THE REACTOR</h2><span class="panel-caption">SIX COILS HOLD THE RING</span>
+    <span class="stage-state"><b></b><span id="stage-text">同步盘口中</span></span></div>
+  <div class="reactor-readouts quotes">
+    <button class="quote-pick" data-side="up" type="button" aria-label="查看 Up 上涨盘口" aria-pressed="true"><small><i></i> UP · 上涨 / 卖一</small><strong id="quote-up">—</strong><em id="quote-up-meta">等待盘口</em></button>
+    <div class="field-title"><small>FIELD SYSTEM / R–01</small><b>REACTOR 01 <i>·</i> TOKAMAK</b><span><i></i> <span id="field-status">连接 Polymarket</span></span></div>
+    <button class="quote-pick market-odds" data-side="down" type="button" aria-label="查看 Down 下跌盘口" aria-pressed="false"><small><i></i> DOWN · 下跌 / 卖一</small><strong id="quote-down">—</strong><em id="quote-down-meta">等待盘口</em></button>
+  </div>
+  <div class="station">
+    <aside class="manifold"><h3>FEED MANIFOLD <span>06</span></h3><div id="feeds"></div></aside>
+    <div class="chamber">
+      <div class="contracts"><div><small>WINDOW</small><span class="period-pick" role="group" aria-label="BTC 合约周期"><button data-interval="5m" type="button" aria-pressed="true">5m</button><button data-interval="15m" type="button" aria-pressed="false">15m</button></span></div><div><small>OUTCOME</small><b id="selected-outcome">UP</b></div><div><small>SPREAD</small><b id="spread">—</b></div><div><small>MIN. SIZE</small><b id="min-size">—</b></div><div><small>BOOK · LOCAL</small><b id="last-book">—</b></div></div>
+      <div class="reactor-art" id="art"><canvas id="field" aria-label="磁场线环、中央悬浮球及六名角色"></canvas><svg class="leads" aria-hidden="true"><g id="leads"></g></svg><div id="stations"></div></div>
+    </div>
+    <aside class="command"><h3>COMMAND DECK <span>R–01</span></h3>
+      <div class="module ticket" aria-label="所选方向盘口摘要"><span class="module-title">ORDER BOOK</span><span class="bet" id="contract-name">BTC UP · 5M</span><span class="ticket-table"><span><small>BEST BID</small><b id="cmd-bid">—</b></span><span><small>BEST ASK</small><b id="cmd-ask">—</b></span><span><small>TICK</small><b id="cmd-tick">—</b></span><span><small>MIN. SIZE</small><b id="cmd-min">—</b></span></span></div>
+      <div class="module coil-module"><div class="module-title">COIL CURRENTS <span>DEPTH</span></div><div id="coils"></div></div>
+      <div class="module core-module"><div class="module-title">CORE OUTPUT</div><b id="core-level">—</b><svg viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path id="core-line" fill="none" stroke="#7754a6" stroke-width="1.4"/></svg></div>
+    </aside>
+  </div>
+</section>
+<div id="status-note" class="status-note" role="status" hidden></div>
+<div class="live-tools"><div class="unit-pick" role="group" aria-label="行情图与历史路径回放的价格单位"><span>图表价格</span><button type="button" data-chart-unit="btc" aria-pressed="true">BTC / USD</button><button type="button" data-chart-unit="contract" aria-pressed="false">合约 ¢</button></div><span id="chart-source">Coinbase BTC/USD 现货参考价</span></div>
+<div class="lower-view" id="live-lower" role="region" aria-label="Polymarket 实时合约图表">
+<div class="charts-top"><section class="plot" data-pm-panel="pnl" aria-label="盘口六档深度归因"></section><section class="plot" id="live-tape" data-pm-panel="tape" aria-label="所选方向价格历史及实时盘口"></section></div>
+<div class="charts-bottom">
+  <section class="trace plot" id="live-trace"><div class="trace-title"><h2><i></i> THE TRACE</h2><button type="button" id="trace-detail" aria-controls="live-terminal" aria-expanded="false" title="展开逐字命令终端">EVENT STREAM</button><b id="log-count">00</b></div><div class="trace-status"><i></i><b id="trace-phase">CONNECTING</b><span id="trace-ticket">—</span></div><div id="events" role="log" aria-label="巡检记录" aria-live="off"></div></section>
+  <section class="plot" data-pm-panel="prior" id="live-prior" aria-label="历史价格片段对齐回放与终点分布"></section>
+  <section class="plot" data-pm-panel="latency" aria-label="实测行情请求和角色巡检耗时"></section>
+</div>
+</div>
+</main>
+<footer id="live-footer"><span><i></i> POLYMARKET · <span id="stream-source">行情快照</span></span><span class="dispatch-hint">点击角色可分派任务</span><span class="footer-market"><span id="contract-line">正在查询本期合约</span><a id="official-market" target="_blank" rel="noopener noreferrer" hidden>官方合约 ↗</a></span></footer>
+</div>
+<canvas id="transit" aria-hidden="true"></canvas>
+<script src="./desk.js?v=e901a82e9092" defer></script>
+</body></html>
